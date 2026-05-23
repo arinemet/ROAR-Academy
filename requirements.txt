@@ -1,0 +1,40 @@
+# ROAR Academy — Python 3.11 environment
+# This file is the canonical package list for the course.
+# It mirrors the versions called out in README.md.
+#
+# Recommended setup (see README.md for the long-form instructions):
+#     conda create -n roar python=3.11
+#     conda activate roar
+#     python -m pip install --upgrade pip
+#     python -m pip install -r requirements.txt
+#
+# macOS Apple Silicon (M1/M2/M3/M4) users: the `tensorflow-macos` /
+# `tensorflow-metal` lines below replace `tensorflow` automatically when pip
+# evaluates the environment markers. See:
+# https://developer.apple.com/metal/tensorflow-plugin/
+
+# ---- core scientific stack ----
+numpy>=1.22,<1.24          # TensorFlow 2.12 requires NumPy 1.22.x or 1.23.x
+matplotlib>=3.7,<3.9
+scipy>=1.10
+pandas>=2.0
+pillow>=9.5
+opencv-python>=4.8,<4.11
+
+# ---- deep learning (Keras 2 API, bundled inside TensorFlow 2.12) ----
+# Do NOT also `pip install keras` — TF 2.12 already ships Keras 2.12 inside it.
+# Both `import keras` and `from tensorflow import keras` resolve to that copy.
+tensorflow==2.12.* ; sys_platform != "darwin" or platform_machine != "arm64"
+tensorflow-macos==2.12.* ; sys_platform == "darwin" and platform_machine == "arm64"
+tensorflow-metal==0.8.0  ; sys_platform == "darwin" and platform_machine == "arm64"
+
+# ---- reinforcement learning (classic Gym API used by samples/cartpole_dqn.py) ----
+gym==0.26.2
+pyglet==1.5.27
+pygame==2.6.1
+
+# ---- notebook tooling for the .ipynb lessons in Part One / Part Two ----
+jupyter>=1.0
+ipykernel>=6.25
+notebook>=7.0
+ipywidgets>=8.0

@@ -19,7 +19,16 @@ Users of this course are recommended to install the following software packages.
 
 **NOTE: If you are running conda and code in Windows, launching code from Anaconda Prompt will make sure that the conda environment available inside the integrated Terminal window. Otherwise you may encounter error that conda is not installed**
 
-Once Python 3.11 is installed, the following Python modules can be installed using pip within the conda environment (for example, in (base) environment):
+Once Python 3.11 is installed, create a dedicated conda environment for the course and install every required Python module in a single step using the `requirements.txt` file at the repo root:
+~~~
+    conda create -n roar python=3.11
+    conda activate roar
+    python -m pip install --upgrade pip
+    python -m pip install -r requirements.txt
+~~~
+The `requirements.txt` file pins NumPy, matplotlib, TensorFlow 2.12 (Keras 2 bundled), `gym==0.26.2`, `pyglet==1.5.27`, `pygame==2.6.1`, and the Jupyter notebook tooling to versions that have been tested together for this course. If you prefer to install modules one at a time, the sections below list the individual `pip install` commands.
+
+For the basic Python and NumPy exercises (Part One and the early Part Two notebooks), the minimum set is:
 ~~~
     python -m pip install numpy matplotlib
 ~~~

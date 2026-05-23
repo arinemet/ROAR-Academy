@@ -81,6 +81,20 @@ class DQNAgent:
 
 
 if __name__ == "__main__":
+    # Quick device probe: on macOS with `tensorflow-metal` installed, TF will
+    # see the Apple GPU as a Metal "PluggableDevice" and dispatch ops to it
+    # automatically — no model code change required. On CUDA boxes the same
+    # call lists the NVIDIA GPU(s). Empty list = CPU-only execution.
+    import tensorflow as _tf
+    _gpus = _tf.config.list_physical_devices('GPU')
+    if _gpus:
+        names = ", ".join(d.name for d in _gpus)
+        print(f"[device] TensorFlow sees {len(_gpus)} GPU device(s): {names}")
+        print("         On Apple Silicon this is the Metal GPU (via tensorflow-metal).")
+    else:
+        print("[device] No GPU visible to TensorFlow — training will use CPU.")
+        print("         On Apple Silicon, install `tensorflow-metal` to enable Metal acceleration.")
+
     # Gymnasium uses render_mode as a constructor kwarg; the env then renders
     # automatically during step() when render_mode='human'.
     # Fall back to a non-rendering env on headless machines (no display, no SDL).

@@ -53,17 +53,38 @@ import sys
 import gymnasium as gym
 import highway_env  # noqa: F401  -- importing this registers parking-v0 with gymnasium
 import numpy as np
+import torch
 
 from stable_baselines3 import SAC, HerReplayBuffer
 from stable_baselines3.common.callbacks import BaseCallback
 
 
+def _pick_torch_device() -> str:
+    """Pick the best PyTorch device available on this machine.
+
+    stable-baselines3's own `device="auto"` resolves to "cuda" or "cpu" and
+    does *not* consider Apple's Metal Performance Shaders (MPS) backend. So
+    on an Apple Silicon Mac (M1/M2/M3/M4/M5/M5 Max/…), SB3 would silently
+    train on CPU even though there's a perfectly good GPU available. This
+    helper explicitly chooses MPS when it's present.
+
+    Precedence: CUDA > MPS > CPU. CUDA wins on Linux/Windows boxes with an
+    NVIDIA GPU; MPS wins on any modern macOS arm64 machine; everything else
+    falls through to CPU.
+    """
+    if torch.cuda.is_available():
+        return "cuda"
+    if getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+
 # ---------------------------------------------------------------------------
 # Training configuration
 # ---------------------------------------------------------------------------
-# Default budget tuned for a short classroom demo: ~5 minutes on a modern CPU.
+# Default budget tuned for a classroom demo: ~10 minutes on a modern CPU.
 # Bump to 100_000 - 200_000 for a polished policy that parks reliably.
-TOTAL_TIMESTEPS = 20_000
+TOTAL_TIMESTEPS = 40_000
 
 # Animation knobs:
 #   RENDER_DURING_TRAINING — every EVAL_FREQ training steps, pause and play one
@@ -89,19 +110,71 @@ MODEL_PATH = os.path.join(
 # ---------------------------------------------------------------------------
 # Environment factory
 # ---------------------------------------------------------------------------
+class Float32DictObservation(gym.ObservationWrapper):
+    """Cast every array in a Dict observation to float32.
+
+    Why this exists:
+      highway-env's parking-v0 returns observation arrays as numpy float64,
+      which is fine on CPU and CUDA but breaks PyTorch's MPS (Apple Silicon)
+      backend — MPS supports float32 / bfloat16 / float16 but not float64,
+      so the moment stable-baselines3 tries to move the obs to device="mps"
+      it raises `TypeError: Cannot convert a MPS Tensor to float64 dtype`.
+
+      Casting at the env boundary fixes the problem for the whole pipeline:
+      the obs that SB3 sees is already float32, so the HER replay buffer
+      stores float32, the policy network consumes float32, and everything
+      lives happily on MPS. The wrapper is a no-op for CPU/CUDA training.
+    """
+
+    def __init__(self, env: gym.Env):
+        super().__init__(env)
+        assert isinstance(env.observation_space, gym.spaces.Dict), (
+            "Float32DictObservation expects a Dict observation space "
+            "(parking-v0 satisfies this)."
+        )
+        new_spaces = {}
+        for key, space in env.observation_space.spaces.items():
+            # We only need to recast float-typed Box spaces; anything else
+            # passes through unchanged so the wrapper stays general-purpose.
+            if isinstance(space, gym.spaces.Box) and np.issubdtype(space.dtype, np.floating):
+                new_spaces[key] = gym.spaces.Box(
+                    low=np.asarray(space.low, dtype=np.float32),
+                    high=np.asarray(space.high, dtype=np.float32),
+                    shape=space.shape,
+                    dtype=np.float32,
+                )
+            else:
+                new_spaces[key] = space
+        self.observation_space = gym.spaces.Dict(new_spaces)
+
+    def observation(self, obs):
+        return {
+            key: (np.asarray(value, dtype=np.float32)
+                  if isinstance(value, np.ndarray) and np.issubdtype(value.dtype, np.floating)
+                  else value)
+            for key, value in obs.items()
+        }
+
+
 def make_env(render: bool = False):
     """Construct the highway-env parking environment.
 
     parking-v0 returns a Dict observation containing `observation`,
     `achieved_goal`, and `desired_goal` — the structure HER expects. The
     Dict observation is also why the SAC policy below is `MultiInputPolicy`.
+
+    The observation is wrapped in Float32DictObservation so the env's
+    float64 arrays are recast to float32 before SB3 sees them; this is
+    required for the PyTorch MPS (Apple GPU) backend and harmless on
+    CPU/CUDA.
     """
     render_mode = "human" if render else None
     try:
-        return gym.make("parking-v0", render_mode=render_mode)
+        env = gym.make("parking-v0", render_mode=render_mode)
     except Exception:
         # Fallback if 'human' rendering can't open a window (headless CI).
-        return gym.make("parking-v0", render_mode="rgb_array")
+        env = gym.make("parking-v0", render_mode="rgb_array")
+    return Float32DictObservation(env)
 
 
 # ---------------------------------------------------------------------------
@@ -187,9 +260,18 @@ def train() -> SAC:
     #   * Three 256-unit hidden layers is more than usually needed for low-
     #     dimensional control tasks, but it gives SAC enough capacity to
     #     model the multi-modal action distribution induced by HER.
+    device = _pick_torch_device()
+    if device == "mps":
+        print(f"\n[device] Using Apple Metal (MPS) — SAC will train on the Mac GPU.")
+    elif device == "cuda":
+        print(f"\n[device] Using NVIDIA CUDA — SAC will train on the GPU.")
+    else:
+        print(f"\n[device] No GPU detected — SAC will train on CPU.")
+
     model = SAC(
         policy="MultiInputPolicy",
         env=env,
+        device=device,
         replay_buffer_class=HerReplayBuffer,
         replay_buffer_kwargs=dict(
             n_sampled_goal=4,
@@ -234,7 +316,8 @@ def train() -> SAC:
 def evaluate(num_episodes: int = 5) -> None:
     """Roll out the trained policy with rendering so you can watch it park."""
     env = make_env(render=True)
-    model = SAC.load(MODEL_PATH, env=env)
+    # Same device-picking logic as train(): use Apple GPU (MPS) when present.
+    model = SAC.load(MODEL_PATH, env=env, device=_pick_torch_device())
 
     episode_rewards = []
     for ep in range(num_episodes):
